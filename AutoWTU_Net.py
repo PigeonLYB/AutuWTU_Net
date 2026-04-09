@@ -33,18 +33,19 @@ os.chdir(APP_DIR)
 
 
 # ==================== 全局配置 ====================
+DEFAULT_LOCK_PORT = 29666  # 避开常见服务端口，降低冲突概率
 CONFIG_PATH = os.path.join(APP_DIR, "wifi_config.json")
 LOG_PATH = os.path.join(APP_DIR, "debug.log")
 ICON_NAME = "icon.ico"
 TITLE_IMG = "title.png"
-AUTHOR_URL = "https://github.com/Pigeon-LYB"
-
+AUTHOR_URL = "https://github.com/PigeonLYB/AutoWTU_Net"
 current_config = {
     "userId": "",
     "password": "",
     "service": "DX",
-    "port": 16666,
+    "port": DEFAULT_LOCK_PORT,
     "interval": 5,
+    "startup_delay": 5,
     "auto_start": False  # 新增：开机自启配置项
 }
 
@@ -69,7 +70,7 @@ def get_app_path():
 def is_auto_start_enabled():
     """检查是否已设置开机自启"""
     try:
-        app_path = get_app_path()
+        app_path = os.path.normcase(os.path.normpath(get_app_path()))
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
@@ -78,7 +79,10 @@ def is_auto_start_enabled():
         )
         try:
             value, _ = winreg.QueryValueEx(key, "AutoWTU")
-            return value == app_path
+            # 注册表中可能是带引号的可执行路径
+            startup_path = str(value).strip().strip('"')
+            startup_path = os.path.normcase(os.path.normpath(startup_path))
+            return startup_path == app_path
         except FileNotFoundError:
             return False
         finally:
@@ -89,31 +93,34 @@ def is_auto_start_enabled():
 
 def set_auto_start(enable):
     """设置或取消开机自启"""
+    key = None
     try:
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
             0,
-            winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE
+            winreg.KEY_SET_VALUE
         )
 
         if enable:
             app_path = get_app_path()
-            winreg.SetValueEx(key, "AutoWTU", 0, winreg.REG_SZ, app_path)
-            write_log(f"已设置开机自启: {app_path}")
-            return True
+            # 关键：加引号防止空格路径失效
+            winreg.SetValueEx(key, "AutoWTU", 0, winreg.REG_SZ, f'"{app_path}"')
+            write_log("已设置开机自启")
         else:
             try:
                 winreg.DeleteValue(key, "AutoWTU")
                 write_log("已取消开机自启")
             except FileNotFoundError:
                 pass  # 本来就没有
-            return True
 
-        winreg.CloseKey(key)
+        return True
     except Exception as e:
         write_log(f"设置开机自启失败: {e}")
         return False
+    finally:
+        if key:
+            winreg.CloseKey(key)
 
 def toggle_auto_start():
     """切换开机自启状态"""
@@ -191,7 +198,7 @@ def check_single_instance():
     try:
         global _lock_socket
         _lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _lock_socket.bind(("127.0.0.1", current_config.get("port", 16666)))
+        _lock_socket.bind(("127.0.0.1", current_config.get("port", DEFAULT_LOCK_PORT)))
         return True
     except OSError:
         r = tk.Tk()
@@ -514,7 +521,7 @@ def show_config_window():
     tk.Spinbox(frame, from_=1, to=60, textvariable=i_v, width=23).grid(row=3, column=1)
 
     tk.Label(frame, text="防多开端口:").grid(row=4, column=0, pady=5, sticky="e")
-    port_v = tk.StringVar(value=str(current_config.get("port", 16666)))
+    port_v = tk.StringVar(value=str(current_config.get("port", DEFAULT_LOCK_PORT)))
     tk.Entry(frame, textvariable=port_v, width=25).grid(row=4, column=1)
 
     # 新增：开机自启复选框
@@ -606,6 +613,16 @@ def show_config_window():
 # ==================== 后台守护 ====================
 def worker():
     write_log("=== 后台守护线程开启 ===")
+
+    # 给系统和 WiFi 留出初始化时间，避免开机瞬间探测失败
+    delay_seconds = max(0, int(current_config.get("startup_delay", 5)))
+    if delay_seconds > 0:
+        write_log(f"启动延迟 {delay_seconds} 秒，等待网络初始化...")
+        for _ in range(delay_seconds):
+            if stop_event.is_set():
+                return
+            time.sleep(1)
+
     while not stop_event.is_set():
         try:
             if not is_network_ok():
