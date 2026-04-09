@@ -17,21 +17,24 @@ from urllib.parse import urljoin
 import winreg  # 新增：用于Windows注册表操作
 
 
-def get_config_path():
-    """获取配置文件绝对路径"""
+def get_app_directory():
+    """获取应用程序所在目录（exe或脚本所在目录）"""
     if getattr(sys, 'frozen', False):
-        # 打包后的 exe，配置文件放在 exe 同目录
-        base_dir = os.path.dirname(sys.executable)
+        # 打包后的 exe
+        return os.path.dirname(sys.executable)
     else:
-        # 开发环境
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Python 脚本
+        return os.path.dirname(os.path.abspath(__file__))
 
-    return os.path.join(base_dir, "wifi_config.json")
+
+# 设置工作目录为程序所在目录
+APP_DIR = get_app_directory()
+os.chdir(APP_DIR)
 
 
 # ==================== 全局配置 ====================
-CONFIG_PATH = get_config_path()
-LOG_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "debug.log")
+CONFIG_PATH = os.path.join(APP_DIR, "wifi_config.json")
+LOG_PATH = os.path.join(APP_DIR, "debug.log")
 ICON_NAME = "icon.ico"
 TITLE_IMG = "title.png"
 AUTHOR_URL = "https://github.com/Pigeon-LYB"
@@ -139,7 +142,11 @@ def write_log(message):
 
 def resource_path(relative_path):
     """兼容 PyInstaller 打包路径"""
-    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    if getattr(sys, 'frozen', False):
+        # 打包后，资源文件在 _MEIPASS 临时目录
+        base_path = sys._MEIPASS
+    else:
+        base_path = APP_DIR
     return os.path.join(base_path, relative_path)
 
 
