@@ -5,6 +5,9 @@
 
 AutoWTU_Net 是一个面向校园网场景的轻量自动登录/重连工具。支持电信、联通、移动及校园网网关，支持托盘常驻与断网自动重连。
 
+⚠️ **首次使用必读**
+**第一次使用时，需要先在你的设备浏览器上登录校园网（完成运营商账号绑定）**，绑定成功后再使用本工具，才能正常自动登录！
+
 ## Release 下载
 - 发布页：https://github.com/PigeonLYB/AutoWTU_Net/releases
 - 可执行文件：在 Release Assets 中下载 `AutoWTU.exe`
