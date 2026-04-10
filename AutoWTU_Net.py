@@ -30,6 +30,8 @@ os.chdir(APP_DIR)
 
 
 DEFAULT_LOCK_PORT = 29666
+MAX_LOGIN_RETRIES = 3  # 最大重试次数
+RETRY_DELAY = 5  # 重试间隔（秒）
 CONFIG_PATH = os.path.join(APP_DIR, "wifi_config.json")
 LOG_PATH = os.path.join(APP_DIR, "debug.log")
 ICON_NAME = "icon.ico"
@@ -416,6 +418,55 @@ def do_login():
         login_lock.release()
 
 
+def do_login_with_retry(is_first_attempt=False):
+    """带重试功能的登录函数。"""
+    if is_first_attempt:
+        # 开机第一次尝试：失败后仅重试 1 次，并在最终失败时弹窗提示。
+        max_retries = 1
+        retry_delay = RETRY_DELAY
+        show_dialog_on_failure = True
+    else:
+        # 常规后台重试：重试 3 次，不弹窗打扰用户。
+        max_retries = MAX_LOGIN_RETRIES
+        retry_delay = RETRY_DELAY
+        show_dialog_on_failure = False
+
+    last_message = ""
+
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            write_log(f"登录失败，{retry_delay}秒后进行第{attempt}次重试...")
+            time.sleep(retry_delay)
+
+        result = do_login()
+        last_message = result
+        write_log(f"登录尝试 #{attempt + 1}: {result}")
+
+        if "成功" in result or "已在线" in result:
+            return True, result
+
+        if attempt == max_retries and show_dialog_on_failure:
+            # 独立线程弹窗，避免阻塞守护线程。
+            def show_error_dialog():
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showerror(
+                    "连接失败",
+                    "开机首次连接校园网失败！\n\n"
+                    f"错误信息: {result}\n\n"
+                    "请检查:\n"
+                    "1. 账号密码是否正确\n"
+                    "2. 是否已连接校园网WiFi\n"
+                    "3. 网络环境是否正常\n\n"
+                    "程序将继续在后台尝试重连。"
+                )
+                root.destroy()
+
+            threading.Thread(target=show_error_dialog, daemon=True).start()
+
+    return False, last_message
+
+
 def show_config_window():
     """配置窗口：账号、运营商、检测间隔、开机延时、自启动。"""
     global config_window_active
@@ -572,8 +623,11 @@ def show_config_window():
 
 
 def worker():
-    """后台守护：按间隔检测网络，离线则自动尝试登录。"""
+    """后台守护：按间隔检测网络，离线则自动尝试登录（带重试机制）。"""
     write_log("=== 后台守护线程开启 ===")
+
+    # 标记是否为开机后的第一次离线登录尝试
+    is_first_check = True
 
     # 开机初期网络常未稳定，按配置延时后再进入探测逻辑。
     delay_seconds = max(0, min(3600, int(current_config.get("startup_delay", 30))))
@@ -588,8 +642,14 @@ def worker():
         try:
             if not is_network_ok():
                 write_log("检测到网络离线，尝试自动登录...")
-                result = do_login()
-                write_log(f"登录结果: {result}")
+
+                if is_first_check:
+                    success, message = do_login_with_retry(is_first_attempt=True)
+                    is_first_check = False
+                else:
+                    success, message = do_login_with_retry(is_first_attempt=False)
+
+                write_log(f"登录结果: {message}")
             else:
                 write_log("网络正常，无需登录。")
         except Exception as e:
@@ -619,8 +679,18 @@ def run_tray():
         threading.Thread(target=show_config_window, daemon=True).start()
 
     def test_login():
-        result = do_login()
-        write_log(f"[托盘测试] {result}")
+        """手动测试登录，使用重试机制但不弹窗。"""
+        def _test():
+            success, message = do_login_with_retry(is_first_attempt=False)
+            root = tk.Tk()
+            root.withdraw()
+            if success:
+                messagebox.showinfo("测试结果", f"✓ {message}")
+            else:
+                messagebox.showerror("测试结果", f"✗ {message}")
+            root.destroy()
+
+        threading.Thread(target=_test, daemon=True).start()
 
     def toggle_startup():
         if toggle_auto_start():
@@ -632,7 +702,7 @@ def run_tray():
     menu = pystray.Menu(
         item("AutoWTU 校园网助手", lambda: None, enabled=False),
         item("设置中心", open_settings, default=True),
-        item("立即测试登录", lambda: threading.Thread(target=test_login, daemon=True).start()),
+        item("立即测试登录", lambda: test_login()),
         item("开机自启", toggle_startup, checked=lambda item: current_config.get("auto_start", False)),
         item("退出程序", on_exit)
     )
