@@ -44,6 +44,8 @@ current_config = {
     "port": DEFAULT_LOCK_PORT,
     "interval": 5,
     "startup_delay": 30,
+    "login_retries": MAX_LOGIN_RETRIES,
+    "retry_delay": RETRY_DELAY,
     "auto_start": False
 }
 
@@ -166,7 +168,7 @@ def load_config():
     return False
 
 
-def save_config(uid, pwd, serv, port, interval, startup_delay, auto_start=None):
+def save_config(uid, pwd, serv, port, interval, startup_delay, login_retries, retry_delay, auto_start=None):
     """保存用户配置；startup_delay 的单位为秒。"""
     global current_config
     current_config.update({
@@ -175,7 +177,9 @@ def save_config(uid, pwd, serv, port, interval, startup_delay, auto_start=None):
         "service": serv,
         "port": int(port),
         "interval": int(interval),
-        "startup_delay": int(startup_delay)
+        "startup_delay": int(startup_delay),
+        "login_retries": int(login_retries),
+        "retry_delay": int(retry_delay)
     })
     if auto_start is not None:
         current_config["auto_start"] = auto_start
@@ -420,15 +424,15 @@ def do_login():
 
 def do_login_with_retry(is_first_attempt=False):
     """带重试功能的登录函数。"""
+    retry_delay = max(1, int(current_config.get("retry_delay", RETRY_DELAY)))
+
     if is_first_attempt:
         # 开机第一次尝试：失败后仅重试 1 次，并在最终失败时弹窗提示。
         max_retries = 1
-        retry_delay = RETRY_DELAY
         show_dialog_on_failure = True
     else:
-        # 常规后台重试：重试 3 次，不弹窗打扰用户。
-        max_retries = MAX_LOGIN_RETRIES
-        retry_delay = RETRY_DELAY
+        # 常规后台重试：使用可配置重试次数，不弹窗打扰用户。
+        max_retries = max(0, int(current_config.get("login_retries", MAX_LOGIN_RETRIES)))
         show_dialog_on_failure = False
 
     last_message = ""
@@ -498,9 +502,9 @@ def show_config_window():
         label_img = tk.Label(root, image=img_tk)
         label_img.image = img_tk  # 保持引用，避免 Tk 图片被回收后不显示。
         label_img.pack()
-        root.geometry(f"380x{520 + th}")
+        root.geometry(f"380x{580 + th}")
     except Exception:
-        root.geometry("380x610")
+        root.geometry("380x670")
 
     frame = tk.Frame(root)
     frame.pack(pady=10)
@@ -541,13 +545,22 @@ def show_config_window():
     tk.Spinbox(frame, from_=0, to=3600, textvariable=startup_delay_v, width=23).grid(row=5, column=1)
     tk.Label(frame, text="(0-3600秒, 等待网络稳定)", font=("", 8), fg="gray").grid(row=6, column=1, sticky="w")
 
+    tk.Label(frame, text="登录重试次数:").grid(row=7, column=0, pady=5, sticky="e")
+    retries_v = tk.StringVar(value=str(current_config.get("login_retries", MAX_LOGIN_RETRIES)))
+    tk.Spinbox(frame, from_=0, to=10, textvariable=retries_v, width=23).grid(row=7, column=1)
+
+    tk.Label(frame, text="重试间隔(秒):").grid(row=8, column=0, pady=5, sticky="e")
+    retry_delay_v = tk.StringVar(value=str(current_config.get("retry_delay", RETRY_DELAY)))
+    tk.Spinbox(frame, from_=1, to=60, textvariable=retry_delay_v, width=23).grid(row=8, column=1)
+    tk.Label(frame, text="(首次重试与后台重试共用)", font=("", 8), fg="gray").grid(row=9, column=1, sticky="w")
+
     auto_start_var = tk.BooleanVar(value=current_config.get("auto_start", False))
     tk.Checkbutton(
         frame,
         text="开机自动启动",
         variable=auto_start_var,
         command=lambda: None
-    ).grid(row=7, column=1, pady=10, sticky="w")
+    ).grid(row=10, column=1, pady=10, sticky="w")
 
     def thread_test():
         """使用当前输入做一次即时登录测试，不覆盖已保存配置。"""
@@ -593,6 +606,8 @@ def show_config_window():
                 port_v.get(),
                 i_v.get(),
                 startup_delay_v.get(),
+                retries_v.get(),
+                retry_delay_v.get(),
                 auto_start
             )
 
